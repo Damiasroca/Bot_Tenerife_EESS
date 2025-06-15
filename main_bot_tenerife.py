@@ -48,6 +48,12 @@ def create_back_keyboard(callback_data):
         InlineKeyboardButton(B5, callback_data=callback_data)
     ]])
 
+def escape_html(text):
+    """Escape HTML characters in text for safe display."""
+    if not text:
+        return "Unknown"
+    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
 def error_handler(func):
     @wraps(func)
     async def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
@@ -823,12 +829,6 @@ async def get_id_command(update: Update, context: CallbackContext):
     """Simple command to get user's Telegram ID for admin setup."""
     user = update.message.from_user
     
-    # Use HTML formatting instead of Markdown - much more robust
-    def escape_html(text):
-        if not text:
-            return "Unknown"
-        return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-    
     id_msg = f"🆔 <b>Your Telegram Information</b>\n\n"
     id_msg += f"<b>User ID:</b> <code>{user.id}</code>\n"
     id_msg += f"<b>First Name:</b> {escape_html(user.first_name)}\n"
@@ -1028,24 +1028,24 @@ async def admin_users(update: Update, context: CallbackContext):
         
         users = tenerife_data_manager.get_recent_users(limit=limit)
         
-        users_msg = f"👥 **Recent Users (last {limit})**\n\n"
+        users_msg = f"👥 <b>Recent Users (last {limit})</b>\n\n"
         
         for i, user in enumerate(users, 1):
             user_id = user['user_id']
-            username = f"@{user['username']}" if user['username'] else "No username"
-            first_name = user['first_name'] or "Unknown"
+            username = f"@{escape_html(user['username'])}" if user['username'] else "No username"
+            first_name = escape_html(user['first_name'] or "Unknown")
             interactions = user['interaction_count']
             last_seen = user['last_seen'].strftime("%d/%m %H:%M") if user['last_seen'] else "Never"
             
-            users_msg += f"{i}. **{first_name}** ({username})\n"
-            users_msg += f"   ID: `{user_id}` | Interactions: {interactions}\n"
+            users_msg += f"{i}. <b>{first_name}</b> ({username})\n"
+            users_msg += f"   ID: <code>{user_id}</code> | Interactions: {interactions}\n"
             users_msg += f"   Last seen: {last_seen}\n\n"
         
-        users_msg += f"📝 Use `/admin_users [number]` to show more/fewer users (max 100)"
+        users_msg += f"📝 Use <code>/admin_users [number]</code> to show more/fewer users (max 100)"
         
         await update.message.reply_text(
             users_msg, 
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
             reply_markup=create_back_to_main_keyboard()
         )
         
@@ -1063,8 +1063,8 @@ async def admin_user_info(update: Update, context: CallbackContext):
         args = context.args
         if not args:
             await update.message.reply_text(
-                "📝 Usage: `/admin_user [user_id]`\nExample: `/admin_user 123456789`",
-                parse_mode=ParseMode.MARKDOWN,
+                "📝 Usage: <code>/admin_user [user_id]</code>\nExample: <code>/admin_user 123456789</code>",
+                parse_mode=ParseMode.HTML,
                 reply_markup=create_back_to_main_keyboard()
             )
             return
@@ -1079,13 +1079,17 @@ async def admin_user_info(update: Update, context: CallbackContext):
             )
             return
         
-        info_msg = f"👤 **User Details**\n\n"
-        info_msg += f"**Name:** {user_info['first_name']} {user_info['last_name'] or ''}".strip() + "\n"
-        info_msg += f"**Username:** @{user_info['username']}" if user_info['username'] else "**Username:** No username\n"
-        info_msg += f"**User ID:** `{user_info['user_id']}`\n"
-        info_msg += f"**Language:** {user_info['language_code'] or 'Unknown'}\n\n"
+        info_msg = f"👤 <b>User Details</b>\n\n"
+        full_name = f"{escape_html(user_info['first_name'])} {escape_html(user_info['last_name'] or '')}".strip()
+        info_msg += f"<b>Name:</b> {full_name}\n"
+        if user_info['username']:
+            info_msg += f"<b>Username:</b> @{escape_html(user_info['username'])}\n"
+        else:
+            info_msg += f"<b>Username:</b> No username\n"
+        info_msg += f"<b>User ID:</b> <code>{user_info['user_id']}</code>\n"
+        info_msg += f"<b>Language:</b> {user_info['language_code'] or 'Unknown'}\n\n"
         
-        info_msg += f"📊 **Activity:**\n"
+        info_msg += f"📊 <b>Activity:</b>\n"
         info_msg += f"• Total interactions: {user_info['interaction_count']}\n"
         info_msg += f"• First seen: {user_info['first_seen'].strftime('%d/%m/%Y %H:%M')}\n"
         info_msg += f"• Last seen: {user_info['last_seen'].strftime('%d/%m/%Y %H:%M')}\n"
@@ -1093,7 +1097,7 @@ async def admin_user_info(update: Update, context: CallbackContext):
         
         await update.message.reply_text(
             info_msg, 
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
             reply_markup=create_back_to_main_keyboard()
         )
         

@@ -25,6 +25,7 @@ recoleccio_usuaris.py
 Original_main_bot.py
 csv_test.py
 populate_historical_data.py
+ADMIN_SETUP.md
 
 # Ignore build output
 dist/
