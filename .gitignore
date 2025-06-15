@@ -6,6 +6,7 @@ node_modules/
 logs/
 venv/
 __pycache__/
+scripts/
 
 # Ignore environment variable files
 .env
