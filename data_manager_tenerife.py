@@ -13,6 +13,9 @@ import glob
 from constants_tenerife import FUEL_TYPES, MUNICIPALITIES
 from sqlalchemy import create_engine
 import pytz
+import logging
+
+logger = logging.getLogger(__name__)
 
 class TenerifeDataManager:
     def __init__(self):
