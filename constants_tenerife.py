@@ -451,7 +451,7 @@ B_ALERT_DELETE = '🗑️ Eliminar alerta'
 # Alert messages
 M_ALERT_CREATE_START = "🔔 *Crear alerta de precio*\n\nSelecciona el combustible para crear la alerta:"
 M_ALERT_PRICE_INPUT = "💰 *Precio de alerta*\n\nEscribe el precio máximo (ej: 1.50) para recibir notificaciones cuando esté por debajo:"
-M_ALERT_CREATED = "✅ *Alerta creada correctamente*\n\nTe notificaremos cuando el precio baje de {price}€ en {municipality}."
+M_ALERT_CREATED = "✅ *Alerta creada correctamente*\n\nTe notificaremos cuando el precio baje de {price}€ en {municipality}.\n\n💡 *Nota:* La alerta se eliminará automáticamente después de enviarte la notificación."
 M_ALERT_LIST_EMPTY = "📋 *No tienes alertas activas*\n\nPuedes crear una nueva alerta desde cualquier municipio."
 
 # Alert callback data  

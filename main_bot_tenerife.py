@@ -14,6 +14,9 @@ import datetime
 from functools import wraps
 import time
 import telegram
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import asyncio
+import pytz
 
 # Setup logging
 log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -53,6 +56,76 @@ def escape_html(text):
     if not text:
         return "Unknown"
     return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+async def check_and_send_alerts(application):
+    """Periodic function to check for price alerts and send notifications."""
+    try:
+        logger.info("🔔 Checking for price alerts...")
+        
+        # Get notifications that need to be sent
+        notifications = tenerife_data_manager.check_price_alerts()
+        
+        if not notifications:
+            logger.info("✅ No price alerts triggered at this time.")
+            return
+        
+        logger.info(f"🚨 Found {len(notifications)} price alerts to send!")
+        
+        sent_count = 0
+        error_count = 0
+        
+        for notification in notifications:
+            try:
+                # Format the alert message
+                fuel_display = FUEL_TYPES.get(notification['fuel_type'], {}).get('display', notification['fuel_type'])
+                
+                alert_message = f"🚨 **¡ALERTA DE PRECIO!**\n\n"
+                alert_message += f"⛽ **{fuel_display}:** {notification['current_price']}€\n"
+                alert_message += f"💰 **Tu límite:** ≤ {notification['threshold']}€\n"
+                alert_message += f"📍 **Ubicación:** {notification['municipality']}\n\n"
+                alert_message += f"🏪 **Estación:** {notification['station_name']}\n"
+                if notification['station_address']:
+                    alert_message += f"📍 {notification['station_address']}\n\n"
+                alert_message += f"💡 ¡Precio por debajo de tu alerta!"
+                
+                # Create navigation keyboard
+                alert_keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 Menú Principal", callback_data=str(INICI))],
+                    [InlineKeyboardButton("📋 Mis Alertas", callback_data=str(ALERTS))]
+                ])
+                
+                # Send the notification with navigation buttons
+                await application.bot.send_message(
+                    chat_id=notification['user_id'],
+                    text=alert_message,
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=alert_keyboard
+                )
+                
+                # Successfully sent notification - now delete the alert to prevent spam
+                alert_deleted = tenerife_data_manager.delete_alert(
+                    notification['user_id'], 
+                    notification['alert_id']
+                )
+                
+                if alert_deleted:
+                    logger.info(f"   ✅ Sent alert to user {notification['user_id']} - {fuel_display}: {notification['current_price']}€ (alert deleted)")
+                else:
+                    logger.warning(f"   ⚠️ Alert sent but failed to delete alert ID {notification['alert_id']}")
+                
+                sent_count += 1
+                
+                # Small delay to avoid rate limiting
+                await asyncio.sleep(0.1)
+                
+            except Exception as e:
+                error_count += 1
+                logger.error(f"Failed to send alert to user {notification['user_id']}: {e}")
+        
+        logger.info(f"📊 Alert Summary - Sent: {sent_count}, Failed: {error_count}, Total: {len(notifications)}")
+        
+    except Exception as e:
+        logger.error(f"Error in periodic alert checking: {e}")
 
 def error_handler(func):
     @wraps(func)
@@ -1245,7 +1318,8 @@ async def admin_help(update: Update, context: CallbackContext):
     
     help_msg += f"🔧 **System:**\n"
     help_msg += f"• `/admin_broadcast [message]` - Broadcast to all users\n"
-    help_msg += f"• `/admin_create_historical` - Create chart data\n\n"
+    help_msg += f"• `/admin_create_historical` - Create chart data\n"
+    help_msg += f"• `/admin_test_alerts` - Manually test alert system\n\n"
     
     help_msg += f"ℹ️ **Info:**\n"
     help_msg += f"• `/admin_help` - This help message\n\n"
@@ -1290,6 +1364,33 @@ async def admin_alerts(update: Update, context: CallbackContext):
         logger.error(f"Error in admin_alerts: {e}")
         await update.message.reply_text(
             f"❌ Error retrieving alert statistics: {e}",
+            reply_markup=create_back_to_main_keyboard()
+        )
+
+@admin_required
+async def admin_test_alerts(update: Update, context: CallbackContext):
+    """Admin command to manually test the alert system."""
+    try:
+        await update.message.reply_text(
+            "🔔 Checking for price alerts manually...\n\n💡 Note: Triggered alerts will be automatically deleted to prevent spam.",
+            reply_markup=create_back_to_main_keyboard()
+        )
+        
+        # Get application from context
+        application = context.application
+        
+        # Run the alert checker manually
+        await check_and_send_alerts(application)
+        
+        await update.message.reply_text(
+            "✅ Manual alert check completed. Check logs for details.\n\n📊 Any triggered alerts have been sent and automatically deleted.",
+            reply_markup=create_back_to_main_keyboard()
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in admin_test_alerts: {e}")
+        await update.message.reply_text(
+            f"❌ Error testing alerts: {e}",
             reply_markup=create_back_to_main_keyboard()
         )
 
@@ -1373,34 +1474,84 @@ async def alert_create_start(update: Update, context: CallbackContext):
     # Store municipality for alert creation
     context.user_data['alert_municipality'] = municipality_key
     
-    # Get top fuel types for alert creation
-    fuel_buttons = []
-    top_fuels = [
-        ('GASOLINA_95_E5', '🟢 Gasolina 95 E5'),
-        ('GASOLEO_A', '⚫️ Gasóleo A'),
-        ('GASOLINA_98_E5', '🔵 Gasolina 98 E5'),
-        ('GASOLEO_PREMIUM', '🟠 Gasóleo Premium'),
-        ('GLP', '⚪️ GLP'),
-    ]
-    
-    for fuel_key, fuel_display in top_fuels:
-        fuel_buttons.append([InlineKeyboardButton(
-            fuel_display,
-            callback_data=f"{ALERT_FUEL_SELECT}_{fuel_key}"
-        )])
-    
-    # Add back button
-    fuel_buttons.append([InlineKeyboardButton(B5, callback_data=f"{TOWN_PREFIX}{municipality_key}")])
-    
     municipality_display = MUNICIPALITIES[municipality_key]['display']
-    message = f"{M_ALERT_CREATE_START}\n\n📍 *Municipio:* {municipality_display}"
     
-    await query.edit_message_text(
-        text=message,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup(fuel_buttons)
-    )
-    return ALERT_FUEL_SELECT
+    try:
+        # Get stations for this municipality to check available fuel types
+        stations_data, _ = tenerife_data_manager.get_stations_by_municipality(municipality_key, offset=0, limit=1000)
+        
+        if stations_data.empty:
+            await query.edit_message_text(
+                text=f"❌ No hay estaciones disponibles en {municipality_display}",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(B5, callback_data=f"{TOWN_PREFIX}{municipality_key}")
+                ]])
+            )
+            return NIVELL1
+        
+        # Check which fuel types are available in this municipality
+        available_fuels = []
+        all_fuel_types = [
+            ('GASOLINA_95_E5', '🟢 Gasolina 95 E5'),
+            ('GASOLEO_A', '⚫️ Gasóleo A'),
+            ('GASOLINA_98_E5', '🔵 Gasolina 98 E5'),
+            ('GASOLEO_PREMIUM', '🟠 Gasóleo Premium'),
+            ('GLP', '⚪️ GLP'),
+            ('GASOLEO_B', '🟤 Gasóleo B'),
+            ('ADBLUE', '🔴 AdBlue'),
+            ('GAS_NATURAL_COMPRIMIDO', '🟣 Gas Natural Comprimido'),
+        ]
+        
+        for fuel_key, fuel_display in all_fuel_types:
+            fuel_column = FUEL_TYPES[fuel_key]['column'].lower()
+            
+            # Check if any station in this municipality has this fuel type with valid price
+            stations_with_fuel = stations_data[
+                stations_data[fuel_column].notna() & 
+                (stations_data[fuel_column] > 0)
+            ]
+            
+            if not stations_with_fuel.empty:
+                available_fuels.append((fuel_key, fuel_display))
+        
+        if not available_fuels:
+            await query.edit_message_text(
+                text=f"❌ No hay combustibles con precios disponibles en {municipality_display}",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(B5, callback_data=f"{TOWN_PREFIX}{municipality_key}")
+                ]])
+            )
+            return NIVELL1
+        
+        # Create buttons only for available fuel types
+        fuel_buttons = []
+        for fuel_key, fuel_display in available_fuels:
+            fuel_buttons.append([InlineKeyboardButton(
+                fuel_display,
+                callback_data=f"{ALERT_FUEL_SELECT}_{fuel_key}"
+            )])
+        
+        # Add back button
+        fuel_buttons.append([InlineKeyboardButton(B5, callback_data=f"{TOWN_PREFIX}{municipality_key}")])
+        
+        message = f"{M_ALERT_CREATE_START}\n\n📍 *Municipio:* {municipality_display}\n💡 *Mostrando solo combustibles disponibles en este municipio*"
+        
+        await query.edit_message_text(
+            text=message,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(fuel_buttons)
+        )
+        return ALERT_FUEL_SELECT
+        
+    except Exception as e:
+        logger.error(f"Error in alert_create_start for {municipality_display}: {e}")
+        await query.edit_message_text(
+            text=f"❌ Error al cargar combustibles para {municipality_display}",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(B5, callback_data=f"{TOWN_PREFIX}{municipality_key}")
+            ]])
+        )
+        return NIVELL1
 
 @error_handler
 async def alert_fuel_selected(update: Update, context: CallbackContext):
@@ -1422,16 +1573,29 @@ async def alert_fuel_selected(update: Update, context: CallbackContext):
     municipality_display = MUNICIPALITIES[municipality_key]['display']
     fuel_display = FUEL_TYPES[fuel_type]['display']
     
-    # Get current minimum price for reference
+    # Get current minimum price for this specific municipality and fuel type
     try:
-        current_min = tenerife_data_manager.get_stations_by_fuel_ascending(fuel_type, limit=1)
-        if not current_min.empty:
+        # Get stations for this municipality
+        stations_data, _ = tenerife_data_manager.get_stations_by_municipality(municipality_key, offset=0, limit=1000)
+        
+        if not stations_data.empty:
             fuel_column = FUEL_TYPES[fuel_type]['column'].lower()
-            min_price = current_min.iloc[0][fuel_column]
-            price_hint = f"\n💡 *Precio mínimo actual:* {min_price}€"
+            
+            # Filter stations that have this fuel type with valid prices
+            stations_with_fuel = stations_data[
+                stations_data[fuel_column].notna() & 
+                (stations_data[fuel_column] > 0)
+            ]
+            
+            if not stations_with_fuel.empty:
+                min_price = stations_with_fuel[fuel_column].min()
+                price_hint = f"\n💡 *Precio mínimo actual en {municipality_display}:* {min_price}€"
+            else:
+                price_hint = f"\n💡 *No hay precios disponibles para {fuel_display} en {municipality_display}*"
         else:
-            price_hint = ""
-    except:
+            price_hint = f"\n💡 *No hay estaciones disponibles en {municipality_display}*"
+    except Exception as e:
+        logger.error(f"Error getting minimum price for {municipality_display} and {fuel_type}: {e}")
         price_hint = ""
     
     message = f"{M_ALERT_PRICE_INPUT}\n\n📍 *Municipio:* {municipality_display}\n⛽ *Combustible:* {fuel_display}{price_hint}"
@@ -1488,7 +1652,7 @@ async def alert_price_input(update: Update, context: CallbackContext):
     
     if success:
         if result == "updated":
-            message = f"✅ *Alerta actualizada*\n\nTe notificaremos cuando *{FUEL_TYPES[fuel_type]['display']}* esté por debajo de *{price}€* en *{municipality_display}*."
+            message = f"✅ *Alerta actualizada*\n\nTe notificaremos cuando *{FUEL_TYPES[fuel_type]['display']}* esté por debajo de *{price}€* en *{municipality_display}*.\n\n💡 *Nota:* La alerta se eliminará automáticamente después de enviarte la notificación."
         else:
             message = M_ALERT_CREATED.format(price=price, municipality=municipality_display)
     else:
@@ -1854,6 +2018,7 @@ def main():
     application.add_handler(CommandHandler('admin_data_status', admin_data_status))
     application.add_handler(CommandHandler('admin_create_historical', admin_create_historical))
     application.add_handler(CommandHandler('admin_alerts', admin_alerts))
+    application.add_handler(CommandHandler('admin_test_alerts', admin_test_alerts))
     
     # Broadcast confirmation handler
     application.add_handler(MessageHandler(
@@ -1866,6 +2031,23 @@ def main():
         logger.error(f"Exception while handling an update: {context.error}", exc_info=context.error)
     
     application.add_error_handler(error_callback)
+    
+    # Set up periodic alert checking
+    scheduler = AsyncIOScheduler(timezone=pytz.UTC)
+    
+    # Schedule alert checking every 10 minutes
+    scheduler.add_job(
+        check_and_send_alerts,
+        'interval',
+        minutes=10,
+        args=[application],
+        id='alert_checker',
+        name='Price Alert Checker'
+    )
+    
+    # Start the scheduler
+    scheduler.start()
+    print("⏰ Alert checker scheduled to run every 10 minutes")
     
     print("🚀 Starting Tenerife Bot...")
     application.run_polling()
